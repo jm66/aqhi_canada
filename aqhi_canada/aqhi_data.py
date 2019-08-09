@@ -26,32 +26,36 @@ class AqhiData(object):
     }
 
     metadata_meta = {
-        "timestamp": {"xpath": "dateStamp/UTCStamp"},
-        "location": {"xpath": "region"},
+        "timestamp": {"xpath": "dateStamp/UTCStamp", "xtype": "text"},
+        "cgndb": {"xpath": "region", "xtype": "text"},
+        "location": {"xpath": "region", "xtype": "attrib"},
     }
 
     """Get data from Environment Canada."""
 
     def __init__(
         self,
-        province_abr=None,
-        region_id=None,
+        zone_abreviation=None,
+        region_cgndb=None,
         coordinates=None,
         language="english",
     ):
         """Initialize the data object."""
-        if province_abr and region_id:
-            self.province_abr = province_abr
-            self.region_id = region_id
-        else:
-            self.closest_region = self.closest_region(
-                coordinates[0], coordinates[1]
-            )
-            self.province_abr = self.closest_region["abreviation"]
-            self.region_id = self.closest_region["cgndb"]
-
+        # due to inconsistency in XML file attr naming
         self.language = language
         self.language_abr = language[:2].upper()
+        self.zone_name_tag = 'name_%s_CA' % self.language_abr.lower()
+        self.region_name_tag = 'name%s' % self.language_abr.title()
+        # getting closest site
+        if zone_abreviation and region_cgndb:
+            self.abreviation = zone_abreviation
+            self.region_cgndb = region_cgndb
+            site = self.get_site(zone_abreviation, region_cgndb)
+            self.site = site[0] if site else ''
+        else:
+            self.site = self.closest_site(coordinates[0], coordinates[1])
+            self.abreviation = self.site["abreviation"]
+            self.region_cgndb = self.site["cgndb"]
         self.metadata = {}
         self.conditions = {}
         self.forecast_time = ""
@@ -62,7 +66,7 @@ class AqhiData(object):
 
     def update(self):
         result = requests.get(
-            self.XML_URL_OBS.format(self.province_abr, self.region_id),
+            self.XML_URL_OBS.format(self.abreviation, self.region_cgndb),
             timeout=10,
         )
         site_xml = result.content.decode("utf-8-sig")
@@ -70,7 +74,12 @@ class AqhiData(object):
 
         # Update metadata
         for m, meta in self.metadata_meta.items():
-            self.metadata[m] = xml_object.find(meta["xpath"]).text
+            val = getattr(xml_object.find(meta["xpath"]), meta["xtype"])
+            if isinstance(val, dict):
+                for k, v in val.items():
+                    self.metadata['%s_%s' % (m, k)] = v
+            else:
+                self.metadata[m] = val
 
         # Update current conditions
         def get_condition(meta):
@@ -88,7 +97,7 @@ class AqhiData(object):
 
         # Update forecasts
         result = requests.get(
-            self.XML_URL_FOR.format(self.province_abr, self.region_id),
+            self.XML_URL_FOR.format(self.abreviation, self.region_cgndb),
             timeout=10,
         )
         site_xml = result.content.decode("ISO-8859-1")
@@ -123,21 +132,30 @@ class AqhiData(object):
 
         regions = []
         for zone in xml_object.findall("./EC_administrativeZone"):
-            _zone_attrib = zone.attrib
+            _zone_attribs = zone.attrib
+            _zone_attrib = {
+                "abreviation": _zone_attribs["abreviation"],
+                "zone_name": _zone_attribs[self.zone_name_tag],
+            }
             for region in zone.findall("./regionList/region"):
-                _region_attrib = region.attrib
-                _children = region.getchildren()
-                _region_attrib["latitude"] = float(_region_attrib["latitude"])
+                _region_attribs = region.attrib
+
+                _region_attrib = {
+                    "region_name": _region_attribs[self.region_name_tag],
+                    "cgndb": _region_attribs["cgndb"],
+                }
+                _region_attrib["latitude"] = float(_region_attribs["latitude"])
                 _region_attrib["longitude"] = float(
-                    _region_attrib["longitude"]
+                    _region_attribs["longitude"]
                 )
+                _children = region.getchildren()
                 for child in _children:
                     _region_attrib[child.tag] = child.text
                 _region_attrib.update(_zone_attrib)
                 regions.append(_region_attrib)
         return regions
 
-    def closest_region(self, lat, lon):
+    def closest_site(self, lat, lon):
         """
         Return the region obj with the closest station to our lat/lon."""
         region_list = self.get_regions()
@@ -151,3 +169,12 @@ class AqhiData(object):
         closest = min(region_list, key=site_distance)
 
         return closest
+
+    def get_site(self, zone, region):
+        region_list = self.get_regions()
+
+        def filter_region_zone(site):
+            return site['abreviation'] == zone and site['cgndb'] == region
+
+        region_obj = list(filter(filter_region_zone, region_list))
+        return region_obj
