@@ -2,7 +2,26 @@ import re
 import xml.etree.ElementTree as et
 
 from geopy import distance
+from ratelimit import RateLimitException, limits
 import requests
+
+RATE_LIMIT_CALLS = 4
+RATE_LIMIT_PERIOD = 60
+
+
+def ignore_ratelimit_exception(fun):
+    """
+    From https://github.com/michaeldavie/env_canada/env_canada/ec_data.py
+    implementation
+    """
+
+    def res(*args, **kwargs):
+        try:
+            return fun(*args, **kwargs)
+        except RateLimitException:
+            return None
+
+    return res
 
 
 class AqhiData(object):
@@ -64,6 +83,8 @@ class AqhiData(object):
 
         self.update()
 
+    @ignore_ratelimit_exception
+    @limits(calls=RATE_LIMIT_CALLS, period=RATE_LIMIT_PERIOD)
     def update(self):
         result = requests.get(
             self.XML_URL_OBS.format(self.abreviation, self.region_cgndb),

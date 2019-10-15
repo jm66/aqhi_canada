@@ -17,6 +17,7 @@ setuptools.setup(
         "requests>=2.19.1",
         "geopy>=1.16.0",
         "requests_futures>=0.9.7",
+        "ratelimit>=2.2.1",
     ],
     classifiers=(
         "Programming Language :: Python :: 3",
